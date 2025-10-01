@@ -48,6 +48,9 @@ def explore_3D_array_comparison(arr_before: np.ndarray, arr_after: np.ndarray, c
 
   assert arr_after.shape == arr_before.shape
 
+  arr_after = arr_after.transpose(2,1,0)
+  arr_before = arr_before.transpose(2,1,0)
+
   def fn(SLICE):
     fig, (ax1, ax2) = plt.subplots(1, 2, sharex='col', sharey='row', figsize=(10,10))
 
