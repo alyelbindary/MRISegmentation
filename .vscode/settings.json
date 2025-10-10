@@ -1,3 +1,6 @@
 {
-    "cmake.sourceDirectory": "C:/Users/alyel/Desktop/EPFL/MA7 - PDM/PDM/Code/antspy"
+    "cmake.sourceDirectory": "C:/Users/alyel/Desktop/EPFL/MA7 - PDM/PDM/Code/antspy",
+    "python-envs.pythonProjects": [],
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda"
 }
