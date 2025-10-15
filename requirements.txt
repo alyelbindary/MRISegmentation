@@ -1,0 +1,16 @@
+datasets
+monai
+Wand
+Wand[gpu]
+matplotlib
+seaborn
+opencv-python
+torchvision
+scikit-learn
+transformers
+pynrrd
+tensorflow
+tensorflow-estimator
+keras
+ipykernel
+ipywidgets

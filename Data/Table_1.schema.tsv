@@ -1,9 +1,0 @@
-columnName	title	Plugin	description	unitLabel	DICOM.QuantityCode	DICOM.UnitsCode	type	componentNames
-Segment	Segment						string	
-Voxel count	Voxel count	Label Map	Number of voxels in the binary labelmap representation of the segment.		CodeValue:nvoxels|CodingSchemeDesignator:99QIICR|CodeMeaning:Number of voxels	CodeValue:voxels|CodingSchemeDesignator:UCUM|CodeMeaning:voxels	long	
-Volume mm3	Volume	Label Map	Volume of the segment computed from binary labelmap representation.	mm3	CodeValue:118565006|CodingSchemeDesignator:SCT|CodeMeaning:Volume	CodeValue:mm3|CodingSchemeDesignator:UCUM|CodeMeaning:cubic millimeter	double	
-Surface mm2	Surface area	Label Map	Surface area of the segment computed from binary labelmap representation.	mm2	CodeValue:000247|CodingSchemeDesignator:99CHEMINF|CodeMeaning:Surface area	CodeValue:mm2|CodingSchemeDesignator:UCUM|CodeMeaning:square millimeter	double	
-Roundness	Roundness	Label Map	Segment roundness. Calculated from ratio of the area of the hypersphere by the actual area. Value of 1 represents a spherical structure. Computed from binary labelmap representation.				double	
-Flatness	Flatness	Label Map	Segment flatness. Calculated from square root of the ratio of the second smallest principal moment by the smallest. Value of 0 represents a flat structure. Computed from binary labelmap representation. ( https://hdl.handle.net/1926/584 )				double	
-Elongation	Elongation	Label Map	Segment elongation. Calculated from square root of the ratio of the second largest principal moment by the second smallest. Computed from binary labelmap representation. ( https://hdl.handle.net/1926/584 )				double	
-OBB diameter	OBB diameter	Label Map	Oriented bounding box diameter. Computed from binary labelmap representation of the segment.	mm			double	x|y|z
