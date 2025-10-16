@@ -17,6 +17,7 @@ import cv2
 
 import torch
 from torch import nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from monai.metrics import compute_iou
 from monai.metrics import compute_dice
 
@@ -33,6 +34,16 @@ def train_test_model (optimizer : torch.optim.Optimizer,
 
     model.to(device)
     model.train()
+
+    # Initialize scheduler 🔹
+    scheduler = ReduceLROnPlateau(
+        optimizer,
+        mode='min',       # reduce LR when validation loss stops decreasing
+        factor=0.5,       # reduce LR by half
+        patience=3,       # wait 3 epochs before reducing
+        verbose=True,     # log messages when LR changes
+        min_lr=1e-7       # prevent it from going to 0
+    )
 
     train_losses = []
     train_ious = []
@@ -193,6 +204,11 @@ def train_test_model (optimizer : torch.optim.Optimizer,
             mean_test_dice = np.nan
         test_dices.append(mean_test_dice)
         print(f'Mean Test Dice: {mean_test_dice}')
+
+        
+        # Step the scheduler using val loss
+
+        scheduler.step(mean_test_loss)  # reduce LR when val loss stops improving
 
         #########################################
         ############## MODEL SAVING #############
