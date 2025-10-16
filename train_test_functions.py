@@ -120,7 +120,7 @@ def train_test_model (optimizer : torch.optim.Optimizer,
         print(f'Mean Train IoU: {mean_train_iou}')
 
         mean_train_dice = mean([t.cpu().item() for t in batch_dices])
-        train_ious.append(mean_train_dice)
+        train_dices.append(mean_train_dice)
         print(f'Mean Train Dice: {mean_train_dice}')
 
         #########################################
@@ -178,7 +178,7 @@ def train_test_model (optimizer : torch.optim.Optimizer,
 
         mean_test_loss = np.nanmean(batch_losses)
         test_losses.append(mean_test_loss)
-        # print(f'Mean Test Focal loss: {mean_test_loss}')
+        print(f'Mean Test Focal loss: {mean_test_loss}')
 
         if (len(batch_ious) >= 1) :
             mean_test_iou = np.nanmean(batch_ious)
@@ -199,7 +199,7 @@ def train_test_model (optimizer : torch.optim.Optimizer,
         #########################################
 
         if (save) :
-            if (epoch%2 == 0) :
+            if ((epoch+1)%2 == 0) :
                 # Specify the file path where you want to save the model parameters
                 checkpoint_path = f'models/sam_huge_first{epoch+1}.pth'
 
@@ -221,7 +221,9 @@ def test_with_visualization (test_dataloader : torch.utils.data.DataLoader,
                              save=False,
                              visualize = True) :
     test_ious = []
+    test_dices = []
     iou_results = {}
+    dice_results = {}
     model.eval()
 
     # Iteratire through test images
@@ -251,13 +253,19 @@ def test_with_visualization (test_dataloader : torch.utils.data.DataLoader,
 
             iou = compute_iou(sam_mask,
                             ground_truth_masks.unsqueeze(1))
+            
+            dice = compute_dice (
+                    sam_mask, ground_truth_masks.unsqueeze(1)
+                )
 
             sam_mask = sam_mask.squeeze(0).squeeze(0)
 
             print(f'IoU: {iou}')
             test_ious.append(iou)
 
-            print(f"saving iou : {float(iou.squeeze())}")
+            print(f"Dice : {dice}")
+            test_dices.append(dice)
+
 
             # Inside the loop:
             scan_filename = os.path.basename(batch["filename"][0])  # e.g., 13_000_w.png
@@ -267,6 +275,7 @@ def test_with_visualization (test_dataloader : torch.utils.data.DataLoader,
             if len(mask_row) == 1:
                 mask_filename = os.path.basename(mask_row['mask_path'].values[0])  # e.g., 13_000_mask.png
                 iou_results[mask_filename] = float(iou.squeeze())
+                dice_results[mask_filename] = float(dice.squeeze())
 
             # ======================
             # 🔹 SAVE PREDICTED MASK
@@ -326,6 +335,14 @@ def test_with_visualization (test_dataloader : torch.utils.data.DataLoader,
     ds["IoU"] = ds["mask_path"].apply(
         lambda p: iou_results.get(os.path.basename(p), np.nan)
     )
+
+    # 🔹 Add Dice column in the same way
+    ds["Dice"] = ds["mask_path"].apply(
+        lambda p: dice_results.get(os.path.basename(p), np.nan)
+    )
+
+    print(f"Average IoU over test set : {np.mean(test_ious)}")
+    print(f"Average Dice over test set : {np.mean(test_dices)}")
 
     return ds
         
