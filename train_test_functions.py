@@ -45,12 +45,11 @@ def train_test_model (optimizer : torch.optim.Optimizer,
         min_lr=1e-7
     )
 
-    train_losses = []
-    train_ious = []
-    train_dices = []
-    test_losses = []
-    test_ious = []
-    test_dices = []
+    # Lists to store metrics per epoch
+    train_losses, train_ious, train_dices = [], [], []
+    train_loss_std, train_iou_std, train_dice_std = [], [], []
+    test_losses, test_ious, test_dices = [], [], []
+    test_loss_std, test_iou_std, test_dice_std = [], [], []
 
     for epoch in range(num_epochs):
 
@@ -109,8 +108,10 @@ def train_test_model (optimizer : torch.optim.Optimizer,
             dices = compute_dice(
                 sam_masks, ground_truth_masks.unsqueeze(1), ignore_empty=False
             )
-            batch_ious.append(ious.mean())
-            batch_dices.append(dices.mean())
+            
+            # Convert to float and append, using nanmean to avoid NaNs
+            batch_ious.append(torch.nanmean(ious).cpu().item())
+            batch_dices.append(torch.nanmean(dices).cpu().item())
 
             # backward pass (compute gradients of parameters w.r.t. loss)
             optimizer.zero_grad()
@@ -122,17 +123,17 @@ def train_test_model (optimizer : torch.optim.Optimizer,
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        mean_train_loss = mean(batch_losses)
-        train_losses.append(mean_train_loss)
-        print(f'Mean Train Focal loss: {mean_train_loss}')
+        # Compute epoch metrics: mean + std
+        train_losses.append(np.nanmean(batch_losses))
+        train_loss_std.append(np.nanstd(batch_losses))
+        train_ious.append(np.nanmean(batch_ious))
+        train_iou_std.append(np.nanstd(batch_ious))
+        train_dices.append(np.nanmean(batch_dices))
+        train_dice_std.append(np.nanstd(batch_dices))
 
-        mean_train_iou = mean([t.cpu().item() for t in batch_ious])
-        train_ious.append(mean_train_iou)
-        print(f'Mean Train IoU: {mean_train_iou}')
-
-        mean_train_dice = mean([t.cpu().item() for t in batch_dices])
-        train_dices.append(mean_train_dice)
-        print(f'Mean Train Dice: {mean_train_dice}')
+        print(f"Train Loss: {train_losses[-1]:.4f} ± {train_loss_std[-1]:.4f}")
+        print(f"Train IoU: {train_ious[-1]:.4f} ± {train_iou_std[-1]:.4f}")
+        print(f"Train Dice: {train_dices[-1]:.4f} ± {train_dice_std[-1]:.4f}")
 
         #########################################
         ############## Test Loop ################
@@ -183,32 +184,25 @@ def train_test_model (optimizer : torch.optim.Optimizer,
 
 
                 sam_mask = sam_mask.squeeze(0).squeeze(0)
+                batch_ious.append(torch.nanmean(iou).cpu().item())
+                batch_dices.append(torch.nanmean(dice).cpu().item())
 
-            batch_ious.append(iou.cpu().item())
-            batch_dices.append(dice.cpu().item())
+        # Compute test epoch metrics
+        test_losses.append(np.nanmean(batch_losses))
+        test_loss_std.append(np.nanstd(batch_losses))
+        test_ious.append(np.nanmean(batch_ious))
+        test_iou_std.append(np.nanstd(batch_ious))
+        test_dices.append(np.nanmean(batch_dices))
+        test_dice_std.append(np.nanstd(batch_dices))
 
-        mean_test_loss = np.nanmean(batch_losses)
-        test_losses.append(mean_test_loss)
-        print(f'Mean Test Focal loss: {mean_test_loss}')
-
-        if (len(batch_ious) >= 1) :
-            mean_test_iou = np.nanmean(batch_ious)
-        else :
-            mean_test_iou = np.nan
-        test_ious.append(mean_test_iou)
-        print(f'Mean Test IoU: {mean_test_iou}')
-
-        if (len(batch_dices) >= 1) :
-            mean_test_dice = np.nanmean(batch_dices)
-        else :
-            mean_test_dice = np.nan
-        test_dices.append(mean_test_dice)
-        print(f'Mean Test Dice: {mean_test_dice}')
+        print(f"Test Loss: {test_losses[-1]:.4f} ± {test_loss_std[-1]:.4f}")
+        print(f"Test IoU: {test_ious[-1]:.4f} ± {test_iou_std[-1]:.4f}")
+        print(f"Test Dice: {test_dices[-1]:.4f} ± {test_dice_std[-1]:.4f}")
 
         
         # Step the scheduler using val loss
 
-        scheduler.step(mean_test_loss)  # reduce LR when val loss stops improving
+        scheduler.step(test_losses[-1])  # reduce LR when val loss stops improving
 
         #########################################
         ############## MODEL SAVING #############
@@ -243,11 +237,17 @@ def train_test_model (optimizer : torch.optim.Optimizer,
     metrics_df = pd.DataFrame({
         "Epoch": list(range(1, num_epochs + 1)),
         "Train_Loss": train_losses,
+        "Train_Loss_STD": train_loss_std,
         "Train_IoU": train_ious,
+        "Train_IoU_STD": train_iou_std,
         "Train_Dice": train_dices,
+        "Train_Dice_STD": train_dice_std,
         "Test_Loss": test_losses,
+        "Test_Loss_STD": test_loss_std,
         "Test_IoU": test_ious,
-        "Test_Dice": test_dices
+        "Test_IoU_STD": test_iou_std,
+        "Test_Dice": test_dices,
+        "Test_Dice_STD": test_dice_std
     })
 
     metrics_path = os.path.join(save_dir, "training_metrics_medsam2.csv")
