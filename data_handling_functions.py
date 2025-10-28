@@ -6,6 +6,8 @@ import io
 import cv2
 import matplotlib.pyplot as plt
 import datasets as dts
+import imageio
+import nrrd
 
 from PIL import Image
 from torch.utils.data import DataLoader
@@ -148,20 +150,27 @@ def get_bounding_box(ground_truth_map):
 
 def get_max_dimensions(df):
     """
-    Compute the maximum height and width across all images/masks.
+    Compute the maximum height and width across all images and masks in a DataFrame.
+    Expects columns 'image_path' and 'mask_path'.
     """
     max_h, max_w = 0, 0
 
     for idx, row in df.iterrows():
-        # Read mask (or image)
-        mask = cv2.imread(row['mask_path'], cv2.IMREAD_UNCHANGED)
-        if mask is None:
-            continue  # skip if failed to load
+        for key in ['image_path', 'mask_path']:
+            path = row.get(key, None)
+            if path is None or not isinstance(path, str) or path.strip() == "":
+                continue  # skip missing paths
 
-        h, w = mask.shape[:2]
-        max_h = max(max_h, h)
-        max_w = max(max_w, w)
+            img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+            if img is None:
+                print(f"[Warning] Could not read file: {path}")
+                continue
 
+            h, w = img.shape[:2]
+            max_h = max(max_h, h)
+            max_w = max(max_w, w)
+
+    print(f"✅ Max height: {max_h}, Max width: {max_w}")
     return max_h, max_w
 
 def pad_mask_and_img(img, mask, target_height, target_width):
@@ -239,3 +248,120 @@ def draw_bounding_box(image):
     y_max = y + h
 
     return [x_min, y_min, x_max, y_max]
+
+def convert_nrrd_to_png_structure(input_folder="data_nrrd", output_base="new_data"):
+    """
+    Convert NRRD volumes (e.g. 8.31-T0-SEG-label.nrrd, 8.31-T0-WATER.nrrd)
+    into PNG slices organized like:
+      new_data/<subject>/<timepoint>-<day>/{Mask,Water}/<prefix>###_{mask|w}.png
+    """
+
+    timepoint_map = {
+        "T0": "00J",
+        "T1": "07J",
+        "T2": "14J",
+        "T3": "21J",
+        "T4": "28J",
+        "T5": "32J"
+    }
+
+    os.makedirs(output_base, exist_ok=True)
+    nrrd_files = [f for f in os.listdir(input_folder) if f.endswith(".nrrd")]
+
+    if not nrrd_files:
+        print("⚠️ No NRRD files found in input folder.")
+        return
+
+    print(f"Found {len(nrrd_files)} NRRD files to process.\n")
+
+    for filename in sorted(nrrd_files):
+        filepath = os.path.join(input_folder, filename)
+        base, _ = os.path.splitext(filename)
+        parts = base.split("-")
+        if len(parts) < 3:
+            print(f"⚠️ Skipping {filename}: unexpected naming format.")
+            continue
+
+        subject = parts[0]
+        timepoint = parts[1]
+        modality_raw = "-".join(parts[2:]).upper()
+
+        try:
+            decimal_part = subject.split(".")[1]
+            subject_digit = decimal_part[-1]
+            if not subject_digit.isdigit():
+                raise ValueError("subject digit not numeric")
+        except Exception:
+            print(f"⚠️ Could not parse subject number from '{subject}' in {filename}. Skipping.")
+            continue
+
+        if not (len(timepoint) >= 2 and timepoint[0] == "T" and timepoint[1].isdigit()):
+            print(f"⚠️ Skipping {filename}: timepoint '{timepoint}' not recognized.")
+            continue
+
+        week_num = int(timepoint[1])
+        day_suffix = timepoint_map.get(timepoint, "XXJ")
+
+        if "SEG" in modality_raw:
+            modality = "Mask"
+            suffix = "_mask.png"
+        elif "WATER" in modality_raw:
+            modality = "Water"
+            suffix = "_w.png"
+        else:
+            print(f"⚠️ Skipping {filename}: unrecognized modality ({modality_raw}).")
+            continue
+
+        try:
+            data, header = nrrd.read(filepath)
+        except Exception as e:
+            print(f"❌ Error reading {filename}: {e}")
+            continue
+
+        if data.ndim == 3:
+            num_slices = data.shape[2] if data.shape[2] > 1 else data.shape[-1]
+        else:
+            num_slices = data.shape[-1]
+
+        print(f"📂 {filename}: {num_slices} slices detected")
+
+        output_folder = os.path.join(output_base, subject, f"{timepoint}-{day_suffix}", modality)
+        os.makedirs(output_folder, exist_ok=True)
+
+        prefix = f"{subject_digit}{week_num}_"
+
+        for i in range(num_slices):
+            slice_img = np.take(data, i, axis=-1)
+            if modality == "Mask":
+                slice_img = (slice_img > 0).astype(np.uint8) * 255
+            else:
+                # Convert slice to float for safe normalization
+                slice_img = slice_img.astype(np.float32)
+
+                # Normalize per-slice to 0-255
+                min_val = slice_img.min()
+                max_val = slice_img.max()
+
+                if max_val > min_val:
+                    slice_img = (slice_img - min_val) / (max_val - min_val)  # scale to 0-1
+                else:
+                    slice_img = np.zeros_like(slice_img)  # all zeros if slice is constant
+
+                slice_img = (slice_img * 255).astype(np.uint8)
+
+                # convert to RGB
+                slice_img = np.stack([slice_img]*3, axis=-1)
+
+            slice_img = np.rot90(slice_img, k=-1)
+
+            out_name = f"{prefix}{i:03d}{suffix}"
+            save_path = os.path.join(output_folder, out_name)
+            imageio.imwrite(save_path, slice_img)
+
+        rel_output = os.path.join(subject, f"{timepoint}-{day_suffix}", modality)
+        print(f"✅ Saved {num_slices} slices for {filename} → {rel_output}\n")
+
+        # ➕ Separator line only for WATER scans
+        if modality == "Water":
+            print("---------------------------------------------------------------------------------------------------")
+

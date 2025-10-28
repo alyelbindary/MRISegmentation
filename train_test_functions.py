@@ -30,19 +30,19 @@ def train_test_model (optimizer : torch.optim.Optimizer,
                       device : str,
                       target_width : int,
                       target_height : int,
-                      save=False) :
+                      save=False,
+                      save_every = 5) :
 
     model.to(device)
     model.train()
 
-    # Initialize scheduler 🔹
+    # Initialize scheduler
     scheduler = ReduceLROnPlateau(
         optimizer,
-        mode='min',       # reduce LR when validation loss stops decreasing
-        factor=0.5,       # reduce LR by half
-        patience=3,       # wait 3 epochs before reducing
-        verbose=True,     # log messages when LR changes
-        min_lr=1e-7       # prevent it from going to 0
+        mode='min',
+        factor=0.5,
+        patience=3,
+        min_lr=1e-7
     )
 
     train_losses = []
@@ -54,7 +54,7 @@ def train_test_model (optimizer : torch.optim.Optimizer,
 
     for epoch in range(num_epochs):
 
-        print(f'EPOCH: {epoch+1}')
+        print(f'------------------------------EPOCH: {epoch+1}------------------------------------')
 
         batch_losses = []
         batch_ious = []
@@ -215,9 +215,9 @@ def train_test_model (optimizer : torch.optim.Optimizer,
         #########################################
 
         if (save) :
-            if ((epoch+1)%2 == 0) :
+            if ((epoch+1)%save_every == 0) :
                 # Specify the file path where you want to save the model parameters
-                checkpoint_path = f'models/sam_huge_first{epoch+1}.pth'
+                checkpoint_path = f'models/medsam2_{epoch+1}.pth'
 
                 # Save the parameters of the entire model
                 torch.save(model.state_dict(), checkpoint_path)
@@ -226,6 +226,47 @@ def train_test_model (optimizer : torch.optim.Optimizer,
                 print("----------------------------------------------------")
 
         model.train()
+
+    #########################################
+    ######## SAVE METRICS TO CSV ############
+    #########################################
+    save_dir = "Losses, IoUs and Dices"
+    os.makedirs(save_dir, exist_ok=True)
+
+    train_losses = [float(x) for x in train_losses]
+    train_ious = [float(x) for x in train_ious]
+    train_dices = [float(x) for x in train_dices]
+    test_losses = [float(x) for x in test_losses]
+    test_ious = [float(x) for x in test_ious]
+    test_dices = [float(x) for x in test_dices]
+
+    metrics_df = pd.DataFrame({
+        "Epoch": list(range(1, num_epochs + 1)),
+        "Train_Loss": train_losses,
+        "Train_IoU": train_ious,
+        "Train_Dice": train_dices,
+        "Test_Loss": test_losses,
+        "Test_IoU": test_ious,
+        "Test_Dice": test_dices
+    })
+
+    metrics_path = os.path.join(save_dir, "training_metrics_medsam2.csv")
+    metrics_df.to_csv(metrics_path, index=False)
+    print(f"📊 Metrics saved to: {metrics_path}")
+
+    # #########################################
+    # ######## BACKUP MODEL SAVING ############
+    # #########################################
+
+    # checkpoint_path = f'models/sam_huge_backup_{num_epochs}.pth'
+
+    # # Save the parameters of the entire model
+    # torch.save(model.state_dict(), checkpoint_path)
+    # print("----------------------------------------------------")
+    # print("------------------- Model Saved! -------------------")
+    # print("----------------------------------------------------")
+
+            
     return train_losses, train_ious, train_dices, test_losses, test_ious, test_dices
 
 def test_with_visualization (test_dataloader : torch.utils.data.DataLoader,
@@ -235,11 +276,13 @@ def test_with_visualization (test_dataloader : torch.utils.data.DataLoader,
                              target_width : int,
                              target_height : int,
                              save=False,
-                             visualize = True) :
+                             visualize = True,
+                             morph = True) :
     test_ious = []
     test_dices = []
     iou_results = {}
     dice_results = {}
+    pred_paths = {}
     model.eval()
 
     # Iteratire through test images
@@ -264,9 +307,6 @@ def test_with_visualization (test_dataloader : torch.utils.data.DataLoader,
                     size=(target_height, target_width),
                     mode = 'nearest')
 
-            # print(sam_mask.shape)
-            # print(ground_truth_masks.shape)
-
             iou = compute_iou(sam_mask,
                             ground_truth_masks.unsqueeze(1))
             
@@ -276,12 +316,34 @@ def test_with_visualization (test_dataloader : torch.utils.data.DataLoader,
 
             sam_mask = sam_mask.squeeze(0).squeeze(0)
 
-            print(f'IoU: {iou}')
+            #########################################
+            ######## MORPHOLOGICAL OPERATION ########
+            #########################################
+
+            if morph :
+
+                # Convert to numpy uint8 mask first
+                sam_mask_np = sam_mask.squeeze().detach().cpu().numpy().astype(np.uint8)
+
+                ################ CLOSING ################
+
+                # 🔹 Apply morphological closing
+                kernel = np.ones((5,5), np.uint8)  # You can adjust the size of the kernel
+                sam_mask_np = cv2.morphologyEx(sam_mask_np, cv2.MORPH_CLOSE, kernel)
+
+                ################ OPENING ################
+
+                # 🔹 Apply morphological opening
+                kernel = np.ones((3,3), np.uint8)  # adjust size depending on noise size
+                sam_mask_np = cv2.morphologyEx(sam_mask_np, cv2.MORPH_OPEN, kernel)
+
+                # Convert back to torch tensor
+                sam_mask = torch.tensor(sam_mask_np, device=device)
+
+                #########################################
+
             test_ious.append(iou)
-
-            print(f"Dice : {dice}")
             test_dices.append(dice)
-
 
             # Inside the loop:
             scan_filename = os.path.basename(batch["filename"][0])  # e.g., 13_000_w.png
@@ -326,16 +388,33 @@ def test_with_visualization (test_dataloader : torch.utils.data.DataLoader,
                 # Save mask
                 cv2.imwrite(save_path, sam_mask_np)
 
+                if not mask_row.empty:
+                    pred_paths[os.path.basename(mask_row['mask_path'].values[0])] = save_path
+                    print(f"💾 Saved mask to: {save_path}")
+                else:
+                    print(f"⚠️ No corresponding mask_row found, skipping pred_paths assignment!")
+
+
+                # 🔹 Save predicted mask path in dictionary
+                save_path = os.path.join(save_dir, pred_name) if save else f"{subject}/{week}/{pred_name}"
+
+                # Use the exact basename of the mask_path from your dataframe as key
+                pred_paths[os.path.basename(mask_row['mask_path'].values[0])] = save_path
+
+            # if dice <= 0.3 :
             if (visualize) :
+                print(f'IoU: {iou}')
+                print(f"Dice : {dice}")
+
                 plt.figure(figsize=(12,4))
                 plt.subplot(1,3,1)
                 plt.imshow(batch["pixel_values"][0,1], cmap='gray')
-                plt.title('Zebrafish Scan')
+                plt.title('Abdominal MRI Scan')
                 plt.axis('off')
 
                 plt.subplot(1,3,2)
                 plt.imshow(batch["ground_truth_mask"][0], cmap='copper')
-                plt.title('Actual Mask')
+                plt.title('Ground Truth Mask')
                 plt.axis('off')
 
                 plt.subplot(1,3,3)
@@ -357,8 +436,17 @@ def test_with_visualization (test_dataloader : torch.utils.data.DataLoader,
         lambda p: dice_results.get(os.path.basename(p), np.nan)
     )
 
-    print(f"Average IoU over test set : {np.mean(test_ious)}")
-    print(f"Average Dice over test set : {np.mean(test_dices)}")
+    # 🔹 Add Predicted Mask Path column
+    ds["pred_mask_path"] = ds["mask_path"].apply(
+        lambda p: pred_paths.get(os.path.basename(p), np.nan)
+    )
+
+    print(f"Average IoU over test set : "\
+            f"{np.nanmean([t.cpu().item() if torch.is_tensor(t) else t for t in test_ious])}"
+    )
+    print(f"Average Dice over test set : "\
+            f"{np.nanmean([t.cpu().item() if torch.is_tensor(t) else t for t in test_dices])}"
+    )
 
     return ds
         
