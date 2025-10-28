@@ -3,3 +3,18 @@ data/
 models/
 data_old/
 Data_2/
+data_mini/
+data_nrrd/
+data_old2/
+data_screenshot/
+Losses, IoUs and Dices/
+MedSAM2/
+new_subject_data/
+nrrd_volumes/
+nrrd_volumes_old/
+nrrd_volumes_with_header/
+opencv/
+predictions/
+predictions_1/
+predictions_2/
+predictions_3/
