@@ -14,6 +14,78 @@ from torch.utils.data import DataLoader
 
 from tiff_to_jpgs import adjust_jpg
 
+import numpy as np
+import matplotlib.pyplot as plt
+from skimage import measure
+
+def remove_small_blobs(mask, min_area_fraction=0.01, plot=False):
+    """
+    Remove small connected components in a 2D binary mask.
+
+    Parameters
+    ----------
+    mask : np.ndarray
+        2D binary mask containing blobs (0 and 1).
+    min_area_fraction : float
+        Blobs smaller than this fraction of the total mask area will be removed.
+        Example: 0.01 → removes blobs smaller than 1% of the total foreground area.
+    plot : bool
+        If True, shows before/after visualization.
+
+    Returns
+    -------
+    cleaned_mask : np.ndarray
+        The mask after removing tiny blobs.
+    """
+
+    not_binary = False
+    mask_vals = np.unique(mask)
+    if (len(mask_vals) > 1) :
+        if (mask_vals[1] > 1) :
+            not_binary = True
+            mask = mask/mask_vals[1]
+
+    if mask.dtype != np.uint8 and mask.dtype != bool:
+        mask = mask.astype(np.uint8)
+
+    # Total IMAGE area (not foreground area)
+    image_area = mask.shape[0] * mask.shape[1]
+    min_area = image_area * min_area_fraction
+
+    # If mask is empty, nothing to clean
+    if np.sum(mask) == 0:
+        print("Warning: Mask is empty.")
+        return mask
+
+    # Label connected components
+    labeled_mask = measure.label(mask, connectivity=2)
+    props = measure.regionprops(labeled_mask)
+
+    # Build output mask
+    cleaned_mask = np.zeros_like(mask)
+
+    for prop in props:
+        if prop.area >= min_area:
+            cleaned_mask[labeled_mask == prop.label] = 1
+
+    # Visualization
+    if plot:
+        fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+        ax[0].imshow(mask, cmap='gray')
+        ax[0].set_title("Original Mask")
+        ax[0].axis('off')
+
+        ax[1].imshow(cleaned_mask, cmap='gray')
+        ax[1].set_title(f"Cleaned Mask\n(min_area_fraction={min_area_fraction})")
+        ax[1].axis('off')
+
+        plt.tight_layout()
+        plt.show()
+
+    if not_binary :
+        cleaned_mask = cleaned_mask*255
+
+    return cleaned_mask
 
 def extract_week_from_folder(folder_name):
     """
@@ -251,9 +323,8 @@ def draw_bounding_box(image):
 
 def convert_nrrd_to_png_structure(input_folder="data_nrrd", output_base="new_data"):
     """
-    Convert NRRD volumes (e.g. 8.31-T0-SEG-label.nrrd, 8.31-T0-WATER.nrrd)
-    into PNG slices organized like:
-      new_data/<subject>/<timepoint>-<day>/{Mask,Water}/<prefix>###_{mask|w}.png
+    Convert NRRD volumes (SEG, WATER, FAT) into PNG slices using structure:
+      new_data/<subject>/<timepoint>-<day>/{Mask,Water,Fat}/<prefix>###_{mask|w|f}.png
     """
 
     timepoint_map = {
@@ -286,6 +357,9 @@ def convert_nrrd_to_png_structure(input_folder="data_nrrd", output_base="new_dat
         timepoint = parts[1]
         modality_raw = "-".join(parts[2:]).upper()
 
+        # -----------------------------
+        # SUBJECT INDEX PARSING
+        # -----------------------------
         try:
             decimal_part = subject.split(".")[1]
             subject_digit = decimal_part[-1]
@@ -295,6 +369,9 @@ def convert_nrrd_to_png_structure(input_folder="data_nrrd", output_base="new_dat
             print(f"⚠️ Could not parse subject number from '{subject}' in {filename}. Skipping.")
             continue
 
+        # -----------------------------
+        # TIMEPOINT (T0, T1, ...)
+        # -----------------------------
         if not (len(timepoint) >= 2 and timepoint[0] == "T" and timepoint[1].isdigit()):
             print(f"⚠️ Skipping {filename}: timepoint '{timepoint}' not recognized.")
             continue
@@ -302,56 +379,74 @@ def convert_nrrd_to_png_structure(input_folder="data_nrrd", output_base="new_dat
         week_num = int(timepoint[1])
         day_suffix = timepoint_map.get(timepoint, "XXJ")
 
+        # -----------------------------
+        # MODALITY DETECTION
+        # -----------------------------
         if "SEG" in modality_raw:
             modality = "Mask"
             suffix = "_mask.png"
+
         elif "WATER" in modality_raw:
             modality = "Water"
             suffix = "_w.png"
+
+        elif "FAT" in modality_raw:
+            modality = "Fat"
+            suffix = "_f.png"
+
         else:
             print(f"⚠️ Skipping {filename}: unrecognized modality ({modality_raw}).")
             continue
 
+        # -----------------------------
+        # LOAD NRRD
+        # -----------------------------
         try:
             data, header = nrrd.read(filepath)
         except Exception as e:
             print(f"❌ Error reading {filename}: {e}")
             continue
 
-        if data.ndim == 3:
-            num_slices = data.shape[2] if data.shape[2] > 1 else data.shape[-1]
-        else:
-            num_slices = data.shape[-1]
-
+        num_slices = data.shape[-1] if data.ndim == 3 else 1
         print(f"📂 {filename}: {num_slices} slices detected")
 
+        # -----------------------------
+        # OUTPUT FOLDER
+        # -----------------------------
         output_folder = os.path.join(output_base, subject, f"{timepoint}-{day_suffix}", modality)
         os.makedirs(output_folder, exist_ok=True)
 
         prefix = f"{subject_digit}{week_num}_"
 
+        # -----------------------------
+        # SLICE LOOP
+        # -----------------------------
         for i in range(num_slices):
             slice_img = np.take(data, i, axis=-1)
-            if modality == "Mask":
-                slice_img = (slice_img > 0).astype(np.uint8) * 255
-            else:
-                # Convert slice to float for safe normalization
-                slice_img = slice_img.astype(np.float32)
 
-                # Normalize per-slice to 0-255
-                min_val = slice_img.min()
-                max_val = slice_img.max()
+            if modality == "Mask":
+                # binary mask → 0/255
+                slice_img = (slice_img > 0).astype(np.uint8) * 255
+                # print(f"slice_img before remove_small_blobs : {np.unique(slice_img)}")
+                slice_img = remove_small_blobs(mask=slice_img, plot=False, min_area_fraction=0.0015)
+                # print(f"slice_img after remove_small_blobs : {np.unique(slice_img)}")
+
+            
+
+            else:
+                # WATER and FAT → normalize per slice and convert to RGB
+                slice_img = slice_img.astype(np.float32)
+                min_val, max_val = slice_img.min(), slice_img.max()
 
                 if max_val > min_val:
-                    slice_img = (slice_img - min_val) / (max_val - min_val)  # scale to 0-1
+                    slice_img = (slice_img - min_val) / (max_val - min_val)
                 else:
-                    slice_img = np.zeros_like(slice_img)  # all zeros if slice is constant
+                    slice_img = np.zeros_like(slice_img)
 
                 slice_img = (slice_img * 255).astype(np.uint8)
-
-                # convert to RGB
                 slice_img = np.stack([slice_img]*3, axis=-1)
 
+            # Rotate to final orientation
             slice_img = np.rot90(slice_img, k=-1)
 
             out_name = f"{prefix}{i:03d}{suffix}"
@@ -361,7 +456,57 @@ def convert_nrrd_to_png_structure(input_folder="data_nrrd", output_base="new_dat
         rel_output = os.path.join(subject, f"{timepoint}-{day_suffix}", modality)
         print(f"✅ Saved {num_slices} slices for {filename} → {rel_output}\n")
 
-        # ➕ Separator line only for WATER scans
-        if modality == "Water":
+        if modality in ["Water", "Fat"]:
             print("---------------------------------------------------------------------------------------------------")
 
+def split_train_test_df(ds,
+                        subject=None,
+                        week=None):
+    """
+    Split a dataset DataFrame into test and train/validation sets based on 
+    specific subject(s) and/or week(s).
+
+    Parameters
+    ----------
+    ds : pd.DataFrame
+        Full dataset containing columns ['image_path', 'mask_path', 'subject', 'week'].
+    subject : str, float, list, or None
+        Subject(s) to include in the test set.
+    week : str, int, list, or None
+        Week(s) to include in the test set.
+
+    Returns
+    -------
+    train_val_df : pd.DataFrame
+        DataFrame containing all samples NOT in the specified subject/week.
+    test_df : pd.DataFrame
+        DataFrame containing only the specified subject/week samples.
+    """
+
+    df_filtered = ds.copy()
+
+    # Convert subject and week to lists if they are single values
+    if subject is not None and not isinstance(subject, (list, tuple, set)):
+        subject = [subject]
+    if week is not None and not isinstance(week, (list, tuple, set)):
+        week = [week]
+
+    # Create boolean mask for test samples (ensure indices align)
+    mask = pd.Series(True, index=df_filtered.index)
+
+    if subject is not None:
+        mask &= df_filtered["subject"].astype(str).isin([str(s) for s in subject])
+    if week is not None:
+        mask &= df_filtered["week"].astype(str).isin([str(w) for w in week])
+
+    # Split into test and train_val
+    test_df = df_filtered[mask].reset_index(drop=True)
+    train_val_df = df_filtered[~mask].reset_index(drop=True)
+
+    train_val_split = (len(train_val_df)/(len(test_df) + len(train_val_df)))*100
+    test_split = 100 - train_val_split
+
+    print(f"✅ Test samples: {len(test_df)}, Train/Val samples: {len(train_val_df)}")
+    print(f"✅ Train/Test Split : {train_val_split:.2f}/{test_split:.2f}")
+    
+    return train_val_df, test_df

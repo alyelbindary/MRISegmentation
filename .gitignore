@@ -24,3 +24,5 @@ new_volume_831/
 data_refine/
 data_segRefiner/
 checkpoints/
+second_sam/
+train_test_SAM.ipynb
